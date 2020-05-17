@@ -11,6 +11,7 @@ import psutil
 import signal
 import subprocess
 import time
+import warnings
 
 # import uno
 from unotools import Socket, connect
@@ -31,11 +32,11 @@ def connect2Calc(file=None, port=8100, counter_max=5000):
     Returns:
         Calc object.
 
-        The main mathods defined for a Calc object exemplyfied down below:
+        The main mathods defined for a Calc object are exemplyfied below:
 
         >>> # adds one sheet ('Sheet2') at position 1
         >>> calcObject.insert_sheets_new_by_name('Sheet2', 1)
-        >>>    
+        >>>
         >>> # adds multiple sheets ('Sheet3' and 'Sheet4) at position 2
         >>> calcObject.insert_multisheets_new_by_name(['Sheet3', 'Sheet4'], 2)
         >>>
@@ -51,7 +52,7 @@ def connect2Calc(file=None, port=8100, counter_max=5000):
         Also, use :py:func:`~backpack.figmanip.setFigurePosition`
     """
     # open libreoffice
-    libreoffice = subprocess.Popen([f"soffice --accept='socket,host=localhost,port={port};urp;'"], shell=True, close_fds=True)
+    libreoffice = subprocess.Popen([f"soffice --nodefault --accept='socket,host=localhost,port={port};urp;'"], shell=True, close_fds=True)
 
     # connect to libreoffice
     connected = False
@@ -136,21 +137,28 @@ def kill_libreoffice_processes():
         os.kill(proc['pid'], signal.SIGKILL)
 
 
-def saveCalc(calcObject, filepath='./untitled.xlsx'):
+def saveCalc(calcObject, filepath=None):
     """Save xlsx file.
 
     Note:
-        If `filepath` have no suffix, it adds '.xlsx' at the end of filepath.
+        If `filepath` have no suffix, it adds '.ods' at the end of filepath.
 
     Args:
         calcObject (Calc object): Object created by :py:func:`calcmanip.connect2Calc`.
         filepath (string or pathlib.Path, optional): filepath to save file.
     """
-    filepath = Path(filepath)
+    if filepath is None:
+        if calcObject.Location == '':
+            filepath = Path('./Untitled.ods')
+            warnings.warn('Saving at ./Untitled.ods')
+        else:
+            filepath = Path(calcObject.Location)
+    else:
+        filepath = Path(filepath)
 
     # fix extension
     if filepath.suffix == '':
-        filepath = filepath.parent / (str(filepath.name) + '.xlsx')
+        filepath = filepath.parent / (str(filepath.name) + '.ods')
 
     # save
     url = convert_path_to_url(str(filepath))
@@ -160,80 +168,223 @@ def saveCalc(calcObject, filepath='./untitled.xlsx'):
 
 # calcObject manipulation
 def get_sheets_name(calcObject):
-    """Get sheets names in a list.
+    """Get sheets names in a tuple."""
+    return calcObject.Sheets.ElementNames
+
+
+
+
+def set_col_width(sheetObject, col, width):
+
+    colsObject = sheetObject.getColumns()
+    colsObject[col].setPropertyValue('Width', width)
+
+
+def get_col_width(sheetObject, col):
+
+    colsObject = sheetObject.getColumns()
+    return colsObject[col].Width
+
+
+def set_row_height(sheetObject, row, height):
+
+    rowsObject = sheetObject.getRows()
+    rowsObject[row].setPropertyValue('Height', height)
+
+
+def get_row_height(sheetObject, row):
+
+    colsObject = sheetObject.getRows()
+    return colsObject[row].Height
+
+
+
+
+def get_cell_value(sheetObject, row, col, type='formula'):
+    """
+    type='data', 'formula'
+    """
+    if type == 'formula':
+        return sheetObject.get_cell_by_position(col, row).getFormula()
+    elif type == 'data':
+        return sheetObject.get_cell_by_position(col, row).getString()
+    else:
+        warnings.warn(f"type = {type} is not a valid option. Using type = 'data'.")
+        return sheetObject.get_cell_by_position(col, row).getString()
+
+
+def set_cell_value(sheetObject, row, col, value, type='formula'):
+    """
+    type='data', 'formula'
+    """
+    if type == 'formula':
+        sheetObject.get_cell_by_position(col, row).setFormula(value)
+    elif type == 'data':
+        sheetObject.get_cell_by_position(col, row).setString(value)
+    else:
+        warnings.warn(f"type = {type} is not a valid option. Using type = 'data'.")
+        sheetObject.get_cell_by_position(col, row).setString(value)
+
+
+def copy_cell(sheet2copyFrom, sheet2pasteAt, row, col, type='formula',
+              Font=1, ConditionalFormat=False, Border=False, resize=None,
+              row2pasteAt=None, col2pasteAt=None, additional=None):
+    """
+    type='string', 'formula', None
+
+    resize = None, 'r', 'c', 'rc' or 'cr'
+
+    This function do not copy ALL the properties of a cell, because it is very
+    time consuming. Instead, it copys only the most used properties. If you
+    need to include additional properties, have a look at
+    ``sheetObject.get_cell_by_position(0, 0)._show_attributes()`` and find the
+    desired propertie. Then, include it in ``additional``.
+    """
+    Font = int(Font)
+    if Font > 4:
+        Font = 4
+    elif Font <0:
+        Font = 0
+
+    if row2pasteAt is None:
+        row2pasteAt = row
+    if col2pasteAt is None:
+        col2pasteAt = col
+
+    # cell value
+    if type is not None:
+        set_cell_value(sheet2pasteAt, row=row2pasteAt, col=col2pasteAt, value=get_cell_value(sheet2copyFrom, row, col, type=type), type=type)
+
+    # font name
+    font_property_list_parsed = [['FormatID', 'CharWeight', 'CharHeight', 'CharColor', 'CellBackColor'],
+                                 [ 'CharFontName',  'CharFont', 'CellStyle'],
+                                 ['CharUnderline', 'CharCrossedOut', 'CharEmphasis', 'CharEscapement', 'CharContoured'],
+                                 ['CharPosture',  'CharPostureComplex',  'CharRelief',  'CharShadowed',  'CharStrikeout',   'CharUnderlineColor',  'CharUnderlineHasColor',]
+                                ]
+
+    font_property_list = [item for sublist in font_property_list_parsed[0:Font] for item in sublist]
+    for property in font_property_list:
+        sheet2pasteAt.get_cell_by_position(col2pasteAt, row2pasteAt).setPropertyValue(property, getattr(sheet2copyFrom.get_cell_by_position(col, row), property))
+
+    # conditional formating
+    if ConditionalFormat:
+        font_property_list = ['ConditionalFormat']
+        for property in font_property_list:
+            sheet2pasteAt.get_cell_by_position(col2pasteAt, row2pasteAt).setPropertyValue(property, getattr(sheet2copyFrom.get_cell_by_position(col, row), property))
+
+    # border
+    if Border:
+        border_property_list = ['TableBorder', 'TableBorder2']#, 'LeftBorder', 'LeftBorder2', 'RightBorder', 'RightBorder2', 'TopBorder', 'TopBorder2', 'BottomBorder', 'BottomBorder2']
+        for property in border_property_list:
+            sheet2pasteAt.get_cell_by_position(col2pasteAt, row2pasteAt).setPropertyValue(property, getattr(sheet2copyFrom.get_cell_by_position(col, row), property))
+
+    # additional
+    if additional is not None:
+        for property in additional:
+            sheet2pasteAt.get_cell_by_position(col2pasteAt, row2pasteAt).setPropertyValue(property, getattr(sheet2copyFrom.get_cell_by_position(col, row), property))
+
+    # col and row width
+    if resize is not None:
+        if resize == 'r':
+            set_row_height(sheet2pasteAt, row2pasteAt, get_row_height(sheet2copyFrom, row))
+        elif resize == 'c':
+            set_col_width(sheet2pasteAt, col2pasteAt, get_col_width(sheet2copyFrom, col))
+        elif resize == 'cr' or resize == 'rc':
+            set_row_height(sheet2pasteAt, row2pasteAt, get_row_height(sheet2copyFrom, row))
+            set_col_width(sheet2pasteAt, col2pasteAt, get_col_width(sheet2copyFrom, col))
+        else:
+            warnings.warn(f"resize = {resize} is not a valid option. Using resize = None.")
+
+
+
+def get_cells_value(sheetObject, row_init, col_init, row_final, col_final, type='data'):
+    """
+    type= formula or data.
+    """
+    sheet_data = sheetObject.get_cell_range_by_position(row_init, col_init, row_final, col_final)
+    if type == 'formula':
+        return sheet_data.getFormulaArray()
+    elif type == 'data':
+        return sheet_data.getDataArray()
+    else:
+        warnings.warn(f"type = {type} is not a valid option. Using type = 'data'.")
+        return sheet_data.getDataArray()
+
+
+def set_cells_value(sheetObject, row_init, col_init, data, type='formula'):
+    """
+    type=formula or data.
+
+    another option would be value: sheet444.set_columns_value(x, y, data)
     """
 
-    return calcObject
+    if type == 'formula':
+        for row, row_data in enumerate(data):
+            sheetObject.set_columns_formula(row_init, row+col_init, row_data)
+    elif type == 'data':
+        for row, row_data in enumerate(data):
+            sheetObject.set_columns_str(row_init, row+col_init, row_data)
+    else:
+        warnings.warn(f"type = {type} is not a valid option. Using type = 'data'.")
+        for row, row_data in enumerate(data):
+            sheetObject.set_columns_str(row_init, row+col_init, row_data)
 
-def copyCells(calcObject, sheet2CopyFrom, sheet2PasteAt, range2copy=(0, 0, 10, 10), range2paste=None, calcObject2Paste=None):
-    """Copy and paste cells.
 
-    Args:
-        calcObject (
+def copy_cells(sheet2copyFrom, sheet2pasteAt, row_init, col_init, row_final, col_final, type='formula',
+              Font=0, ConditionalFormat=False, Border=False, resize=None,
+              row2pasteAt=None, col2pasteAt=None, additional=None):
     """
-    if type(sheet2CopyFrom) == str:
-        sheetObject = calcObject.get_sheet_by_name(sheet2CopyFrom)
+        type='data', 'formula', 'none'
+    """
+
+    if row2pasteAt is None:
+        row2pasteAt = row_init
+    if col2pasteAt is None:
+        col2pasteAt = col_init
+
+    if Font>0 or ConditionalFormat is not False or Border is not False or additional is not False:
+        for row_relative, row in enumerate(range(row_init, row_final)):
+            for col_relative, col in enumerate(range(col_init, col_final)):
+                copy_cell(sheet2copyFrom, sheet2pasteAt, row, col, type=type,
+                          Font=Font, ConditionalFormat=ConditionalFormat, Border=Border, resize=None,
+                          row2pasteAt=row2pasteAt+row_relative, col2pasteAt=col2pasteAt+col_relative, additional=additional)
     else:
-        sheetObject = sheet2CopyFrom
+        data = get_cells_value(sheet2copyFrom, row_init, col_init, row_final, col_final, type=type)
+        set_cells_value(row2pasteAt, row2pasteAt, col2pasteAt, data, type=type)
 
-    if type(sheet2PasteAt) == str:
-        sheetObject2 = calcObject.get_sheet_by_name(sheet2PasteAt)
-    else:
-        sheetObject2 = sheet2PasteAt
-
-    # copy/paste data
-    id_list = get_id(sheetObject)
-    sheet_data = sheetObject.get_cell_range_by_position(0, 0, 10, len(id_list)+1).getDataArray()
-
-    for row, row_data in enumerate(sheet_data):
-        sheetObject2.set_columns_formula(0, row, row_data)
-        for column in range(4, 10):  # copy/paste conditional formating
-            sheetObject2.get_cell_by_position(column, row+1).ConditionalFormat = sheetObject.get_cell_by_position(column, row+1).ConditionalFormat
-
-    # copy column Size
-    cols = sheetObject.getColumns()
-    cols2 = sheetObject2.getColumns()
-    for col_number, col in enumerate(cols[0:11]):
-        cols2[col_number].setPropertyValue('Width', col.Width)
-
-    # fix color formating
-    group_color(sheetObject2, calcObject=None)
+    # col and row width
+    if resize is not None:
+        if resize == 'r' or resize == 'c' or resize == 'cr' or resize == 'rc':
+            if 'r' in resize:
+                for row_relative, row in enumerate(range(row_init, row_final)):
+                    set_row_height(sheet2pasteAt, row2pasteAt+row_relative, get_row_height(sheet2copyFrom, row))
+            if 'c' in resize:
+                for col_relative, col in enumerate(range(col_init, col_final)):
+                    set_col_width(sheet2pasteAt, col2pasteAt+col_relative, get_col_width(sheet2copyFrom, col))
+        else:
+            warnings.warn(f"resize = {resize} is not a valid option. Using resize = None.")
 
 
+def copy_sheet(sheet2copy, sheet2paste, type='formula',
+              Font=0, ConditionalFormat=False, Border=False, resize=None, additional=None):
+    """"
+    """"
+    last_col = len(sheet2copy.getColumnDescriptions())
+    last_row = len(sheet2copy.getRowDescriptions())
+
+    copy_cells(sheet2copy, sheet2paste, 0, 0, last_row, last_col, type=type, Font=Font, ConditionalFormat=ConditionalFormat, Border=Border, resize=resize, additional=None)
 
 
-def copy_sheet(calcObject, sheet2CopyFrom, sheet2PasteAt, calcObject2CopyFrom=None, calcObject2PasteAt=None):
-
-    if type(sheet2CopyFrom) == str:
-        sheetObject = calcObject.get_sheet_by_name(sheet2CopyFrom)
-    else:
-        sheetObject = sheet2CopyFrom
-
-    if type(sheet2PasteAt) == str:
-        sheetObject2 = calcObject.get_sheet_by_name(sheet2PasteAt)
-    else:
-        sheetObject2 = sheet2PasteAt
-
-    # copy/paste data
-    id_list = get_id(sheetObject)
-    sheet_data = sheetObject.get_cell_range_by_position(0, 0, 10, len(id_list)+1).getDataArray()
-
-    for row, row_data in enumerate(sheet_data):
-        sheetObject2.set_columns_formula(0, row, row_data)
-        for column in range(4, 10):  # copy/paste conditional formating
-            sheetObject2.get_cell_by_position(column, row+1).ConditionalFormat = sheetObject.get_cell_by_position(column, row+1).ConditionalFormat
-
-    # copy column Size
-    cols = sheetObject.getColumns()
-    cols2 = sheetObject2.getColumns()
-    for col_number, col in enumerate(cols[0:11]):
-        cols2[col_number].setPropertyValue('Width', col.Width)
-
-    # fix color formating
-    group_color(sheetObject2, calcObject=None)
+def get_cell_value_from_sheets(sheetObject_list, row, col, type='data'):
+    """
+    """
+    values = []
+    for sheetObject in sheetObject_list:
+        values.append(get_cell_value(sheetObject, row, col, type))
+    return values
 
 
-
+# %% specific
 def get_id(sheet, calcObject=None):
 
     if type(sheet) == str:
@@ -256,9 +407,6 @@ def get_id(sheet, calcObject=None):
     return id_list
 
 
-
-
-# %% specific
 def loadCalc(sheet, calcObject=None):
     """Load xlsx file with fit parameters.
 
